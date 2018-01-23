@@ -1,8 +1,13 @@
 #ifndef _UHTTP_H_
 #define _UHTTP_H_
 
+#define _VERBOSE_ 0
+#define REUSE_PORT 1
+#define MAXPENDING 5    // Max Requests
+#define BUFFERSIZE 1024 // Max Recv Buffer Size
 #define SERVER_NAME "attohttpd"
 #define SERVER_URL "http://www.puyan.org"
+#define VPRINTF(x) if (_VERBOSE_) { printf x; }
 
 #include <cstdio>
 #include <cstddef>
@@ -18,24 +23,10 @@
 #include <vector>
 #include <string>
 
-// Logging Macros
-#define _VERBOSE_ 0
-#define VPRINTF(x)                                                             \
-  if (_VERBOSE_)                                                               \
-    printf x;
-
-// Networking Headers
-void *consumer(void *);
-void *producer(void *v_port_number);
-int ContructTCPSocket(unsigned short port);
-int AcceptConnection(int server_socket);
-#define MAXPENDING 5    // Max Requests
-#define BUFFERSIZE 1024 // Max Recv Buffer Size
-#define REUSE_PORT 1
-
-void addSocket(int);
-int removeSocket();
-void InitThreads(int THREADS, uint16_t PORT);
+int ContructTCPSocket(uint16_t port);
+int AcceptConnection(int socket);
+char *ReceiveFromSocket(int socket, char *buffer, size_t len);
+int HttpProtoWrapper(int socket, char *request);
 
 template <typename T> T *CheckedMalloc(size_t n) {
   T *result = (T*)malloc(n);

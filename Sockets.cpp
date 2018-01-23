@@ -60,33 +60,3 @@ char *ReceiveFromSocket(int socket, char *buffer, size_t len) {
   return curToSend;
 }
 
-int http_proto(FILE *socket, char *request);
-int HttpProtoWrapper(int socket, char *request) {
-  FILE *socketFile = fdopen(socket, "w");
-  fflush(socketFile);
-  int result = http_proto(socketFile, request);
-  fflush(socketFile);
-  fclose(socketFile);
-  return result;
-}
-
-void *consumer(void *dumb) {
-  printf("[CONSUMER] Consumer %ld started\n", (long)pthread_self());
-
-  for (;;) {
-    char curToRecv[BUFFERSIZE];
-    bzero(curToRecv, BUFFERSIZE);
-
-    int socket = removeSocket(); // Blocking IO: This is where it waits!!!
-    printf("[CONSUMER] Handling Socket %d\n", socket);
-
-    if (char *curToSend = ReceiveFromSocket(socket, curToRecv, BUFFERSIZE))
-      HttpProtoWrapper(socket, curToSend);
-
-    close(socket);
-  }
-
-  assert(false && "Never Reached!");
-  return nullptr;
-}
-

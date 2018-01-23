@@ -219,3 +219,12 @@ int http_proto(FILE *socket, char *request) {
   return doFile(file, sb.st_size, sb.st_mtime, socket);
 }
 
+int HttpProtoWrapper(int socket, char *request) {
+  FILE *socketFile = fdopen(socket, "w");
+  fflush(socketFile);
+  int result = http_proto(socketFile, request);
+  fflush(socketFile);
+  fclose(socketFile);
+  return result;
+}
+
