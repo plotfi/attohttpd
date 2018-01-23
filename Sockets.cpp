@@ -5,15 +5,6 @@
 
 #include "atto.h"
 
-#define CHECK(check, message) \
-  do { \
-    if ((check) < 0) { \
-      fprintf(stderr, "%s failed: Error on line %d.\n", (message), __LINE__); \
-      perror(message); \
-      exit(EXIT_FAILURE); \
-    } \
-  } while (false)
-
 int ContructTCPSocket(uint16_t portNumber) {
   struct sockaddr_in saddr;                  // Server Socket addr
   bzero(&saddr, sizeof(saddr));           // Zero serve  struct

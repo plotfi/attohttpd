@@ -3,16 +3,13 @@
 
 void *producer(void *s) {
   SyncQueue<int> *syncQueue = (SyncQueue<int>*)s;
+
   const uint16_t portNumber = *((uint16_t *)syncQueue->getToken());
+  printf("[PRODUCER] Initialized, listening on port %d.\n", portNumber);
 
-  VPRINTF((" Producer Port %d\n", portNumber));
-  printf("[PRODUCER] Producer Initialized, listening for connections\n");
-
-  int serverSocket = ContructTCPSocket(portNumber);
-  for (;;) {
+  for (int serverSocket = ContructTCPSocket(portNumber);;) {
     int clientSocket = AcceptConnection(serverSocket);
-    if (clientSocket == -1) continue;
-    syncQueue->enqueue(clientSocket);
+    if (clientSocket >= 0) syncQueue->enqueue(clientSocket);
   }
 
   assert(false && "Never Reached!");
@@ -23,12 +20,12 @@ void *consumer(void *s) {
   printf("[CONSUMER] Consumer %ld started\n", (long)pthread_self());
 
   SyncQueue<int> *syncQueue = (SyncQueue<int>*)s;
+  char curToRecv[BUFFERSIZE];
   for (;;) {
-    char curToRecv[BUFFERSIZE];
     bzero(curToRecv, BUFFERSIZE);
 
     int socket = syncQueue->dequeue();
-    printf("[CONSUMER] Handling Socket %d\n", socket);
+    printf("[CONSUMER] Handling Socket %d.\n", socket);
 
     if (char *curToSend = ReceiveFromSocket(socket, curToRecv, BUFFERSIZE))
       HttpProtoWrapper(socket, curToSend);

@@ -23,8 +23,8 @@
 #include <vector>
 #include <string>
 
-int ContructTCPSocket(uint16_t port);
-int AcceptConnection(int socket);
+int ContructTCPSocket(uint16_t portNumber);
+int AcceptConnection(int serverSocket);
 char *ReceiveFromSocket(int socket, char *buffer, size_t len);
 int HttpProtoWrapper(int socket, char *request);
 
@@ -36,6 +36,15 @@ template <typename T> T *CheckedMalloc(size_t n) {
   }
   return result;
 }
+
+#define CHECK(check, message) \
+  do { \
+    if ((check) < 0) { \
+      fprintf(stderr, "%s failed: Error on line %d.\n", (message), __LINE__); \
+      perror(message); \
+      exit(EXIT_FAILURE); \
+    } \
+  } while (false)
 
 #endif /* _UHTTP_H_ */
 

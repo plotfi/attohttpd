@@ -8,7 +8,9 @@
 
 #define RFC1123FMT "%a, %d %b %Y %H:%M:%S GMT"
 
-static std::string get_mime_type(const char *name) {
+namespace {
+
+std::string get_mime_type(const char *name) {
   if (const char *dot = strrchr(name, '.')) {
     if (!strcmp(dot, ".html")) return "text/html; charset=iso-8859-1";
     if (!strcmp(dot, ".htm"))  return "text/html; charset=iso-8859-1";
@@ -38,7 +40,7 @@ static std::string get_mime_type(const char *name) {
   return "text/plain; charset=iso-8859-1";
 }
 
-static int hexit(char c) {
+int hexit(char c) {
   if (c >= '0' && c <= '9') return c - '0';
   if (c >= 'a' && c <= 'f') return c - 'a' + 10;
   if (c >= 'A' && c <= 'F') return c - 'A' + 10;
@@ -47,7 +49,7 @@ static int hexit(char c) {
   return 0;
 }
 
-static void strdecode(char *to, char *from) {
+void strdecode(char *to, char *from) {
 
   for (; *from != '\0'; ++to, ++from) {
     if (from[0] == '%' && isxdigit(from[1]) && isxdigit(from[2])) {
@@ -61,7 +63,7 @@ static void strdecode(char *to, char *from) {
   *to = '\0';
 }
 
-static void strencode(char *to, size_t tosize, const char *from) {
+void strencode(char *to, size_t tosize, const char *from) {
   int tolen;
 
   for (tolen = 0; *from != '\0' && tolen + 4 < tosize; ++from) {
@@ -79,9 +81,9 @@ static void strencode(char *to, size_t tosize, const char *from) {
   *to = '\0';
 }
 
-static void file_details(char *dir, char *name, FILE *socket) {
-  static char encoded_name[1000];
-  static char path[2000];
+void file_details(char *dir, char *name, FILE *socket) {
+  char encoded_name[1000];
+  char path[2000];
   struct stat sb;
   char timestr[16];
 
@@ -98,9 +100,9 @@ static void file_details(char *dir, char *name, FILE *socket) {
   }
 }
 
-static void send_headers(int status, std::string title,
-                         std::string extra_header, std::string mime_type,
-                         off_t length, time_t mod, FILE *socket) {
+void send_headers(int status, std::string title, std::string extra_header,
+                  std::string mime_type, off_t length, time_t mod,
+                  FILE *socket) {
   time_t now;
   char timebuf[100];
 
@@ -126,8 +128,8 @@ static void send_headers(int status, std::string title,
   fprintf(socket, "\015\012");
 }
 
-static int send_error(int status, std::string title, std::string extra_header,
-                      std::string text, FILE *socket) {
+int send_error(int status, std::string title, std::string extra_header,
+               std::string text, FILE *socket) {
   send_headers(status, title, extra_header, "text/html", -1, -1, socket);
 
   fprintf(socket,
@@ -172,8 +174,11 @@ int http_proto(FILE *socket, char *request) {
   char *file = &(path[1]);
   strdecode(file, file);
 
+  #pragma clang diagnostic push
+  #pragma clang diagnostic ignored "-Wwritable-strings"
   if (file[0] == '\0')
     file = "./";
+  #pragma clang diagnostic pop
 
   size_t len = strlen(file);
 
@@ -218,6 +223,8 @@ int http_proto(FILE *socket, char *request) {
 
   return doFile(file, sb.st_size, sb.st_mtime, socket);
 }
+
+} // end anonymous namespace
 
 int HttpProtoWrapper(int socket, char *request) {
   FILE *socketFile = fdopen(socket, "w");
