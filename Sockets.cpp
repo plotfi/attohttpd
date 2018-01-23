@@ -5,7 +5,7 @@
 
 #include "atto.h"
 
-#define DieWithError(check, message) \
+#define CHECK(check, message) \
   do { \
     if ((check) < 0) { \
       fprintf(stderr, "%s failed: Error on line %d.\n", (message), __LINE__); \
@@ -13,24 +13,6 @@
       exit(EXIT_FAILURE); \
     } \
   } while (false)
-
-void *producer(void *v_port_number) {
-
-  const uint16_t port_number = *((uint16_t *)v_port_number);
-
-  VPRINTF((" Producer Port %d\n", port_number));
-  printf("[PRODUCER] Producer Initialized, listening for connections\n");
-  fflush(stdout);
-
-  int serverSocket = ContructTCPSocket(port_number);
-  for (;;) {
-    int clientSocket = AcceptConnection(serverSocket);
-    if (clientSocket == -1) continue;
-    addSocket(clientSocket);
-  }
-
-  assert(false && "Never Reached!");
-}
 
 int ContructTCPSocket(uint16_t portNumber) {
   struct sockaddr_in saddr;                  // Server Socket addr
@@ -41,12 +23,10 @@ int ContructTCPSocket(uint16_t portNumber) {
 
   int ssock; // Server Socket
   int opt = REUSE_PORT; // reuse port sockopt
-  DieWithError(ssock = socket(PF_INET, SOCK_STREAM, IPPROTO_TCP), "socket()");
-  DieWithError(setsockopt(ssock, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt)),
-               "setsockopt()");
-  DieWithError(bind(ssock, (struct sockaddr *)&saddr, sizeof(saddr)), "bind()");
-  DieWithError(listen(ssock, MAXPENDING), "listen()");
-
+  CHECK(ssock = socket(PF_INET, SOCK_STREAM, IPPROTO_TCP), "socket()");
+  CHECK(setsockopt(ssock, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt)), "sopt");
+  CHECK(bind(ssock, (struct sockaddr *)&saddr, sizeof(saddr)), "bind()");
+  CHECK(listen(ssock, MAXPENDING), "listen()");
   return ssock;
 }
 
@@ -61,6 +41,25 @@ int AcceptConnection(int serverSocket) {
   return (clientSocket < 0) ? -1 : clientSocket;
 }
 
+char *ReceiveFromSocket(int socket, char *buffer, size_t len) {
+  char *curToSend = nullptr;
+
+  for (int bytesRecv = 0; bytesRecv < len;) {
+    int newBytes = recv(socket, buffer + bytesRecv, len - bytesRecv, 0);
+    bytesRecv += newBytes;
+    if (newBytes <= 0) return nullptr; // recv failed, start over.
+
+    char *ptr;
+    if ((curToSend = strtok_r(buffer, "\n", &ptr))) {
+      if (buffer[strlen(curToSend) - 1] == '\r')
+        return curToSend;
+      buffer[strlen(curToSend)] = '\n';
+    }
+  }
+
+  return curToSend;
+}
+
 int http_proto(FILE *socket, char *request);
 int HttpProtoWrapper(int socket, char *request) {
   FILE *socketFile = fdopen(socket, "w");
@@ -72,84 +71,22 @@ int HttpProtoWrapper(int socket, char *request) {
 }
 
 void *consumer(void *dumb) {
-  char *curToSend;
-  int clntSocket;
-  char curToRecv[BUFFERSIZE];
-  char *curToRecv_ptr;
-  char *dgramPtr;
-  int totalBytesRecv;
-  int newBytesRecv;
-  int i;
-
-  #if _VERBOSE_
   printf("[CONSUMER] Consumer %ld started\n", (long)pthread_self());
-  fflush(stdout);
-  #endif
 
   for (;;) {
+    char curToRecv[BUFFERSIZE];
+    bzero(curToRecv, BUFFERSIZE);
 
-    clntSocket = removeSocket(); // This is where it waits!!!
+    int socket = removeSocket(); // Blocking IO: This is where it waits!!!
+    printf("[CONSUMER] Handling Socket %d\n", socket);
 
-    #if _VERBOSE_
-    printf("[CONSUMER] Handling Socket %d\n", clntSocket);
-    fflush(stdout);
-    #endif
+    if (char *curToSend = ReceiveFromSocket(socket, curToRecv, BUFFERSIZE))
+      HttpProtoWrapper(socket, curToSend);
 
-    memset(curToRecv, 0, sizeof(char) * BUFFERSIZE);
-
-    for (i = 0, totalBytesRecv = 0, newBytesRecv = 0, dgramPtr = curToRecv;
-         totalBytesRecv < sizeof(curToRecv);
-         totalBytesRecv += newBytesRecv, i++) {
-
-      VPRINTF(("Receiving %d Bytes. %d Bytes Total.\n", newBytesRecv,
-               totalBytesRecv));
-
-      if (((newBytesRecv = recv(clntSocket, dgramPtr,
-                                sizeof(curToRecv) - totalBytesRecv, 0)) <= 0)) {
-        VPRINTF(("recv() failed\n"));
-        VPRINTF(("Kill connection line %d.\n", __LINE__));
-        close(clntSocket);
-        // pthread_exit(NULL);
-      } else {
-        dgramPtr += newBytesRecv;
-
-        VPRINTF(("%s\n", curToRecv));
-
-        if (NULL != (curToSend = strtok_r(curToRecv, "\n", &curToRecv_ptr))) {
-          if (curToRecv[strlen(curToSend) - 1] == '\r') {
-            VPRINTF(("GOT A CR\n"));
-
-            break; /* HACK */
-            if (curToRecv[strlen(curToSend) - 3] == '\r' &&
-                curToRecv[strlen(curToSend) - 2] == '\n') {
-              break;
-            } else {
-              curToRecv[strlen(curToSend)] = '\n';
-              continue;
-            }
-          } else {
-            curToRecv[strlen(curToSend)] = '\n';
-            continue;
-          }
-        }
-      }
-    }
-
-    VPRINTF(("Out of the Recv() Loop\n"));
-    VPRINTF(("clntSocket: %d\n", clntSocket));
-    fflush(stdout);
-
-    if (!curToSend) {
-      VPRINTF(("curToSend == NULL :(\n"));
-      continue;
-    }
-
-    HttpProtoWrapper(clntSocket, curToSend);
-    VPRINTF(("Socket %d says goodbye.\n", (int)clntSocket));
-    fflush(stdout);
+    close(socket);
   }
 
   assert(false && "Never Reached!");
-  return NULL;
+  return nullptr;
 }
 

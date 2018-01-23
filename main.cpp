@@ -1,5 +1,23 @@
 #include "atto.h"
 
+void *producer(void *v_port_number) {
+
+  const uint16_t port_number = *((uint16_t *)v_port_number);
+
+  VPRINTF((" Producer Port %d\n", port_number));
+  printf("[PRODUCER] Producer Initialized, listening for connections\n");
+  fflush(stdout);
+
+  int serverSocket = ContructTCPSocket(port_number);
+  for (;;) {
+    int clientSocket = AcceptConnection(serverSocket);
+    if (clientSocket == -1) continue;
+    addSocket(clientSocket);
+  }
+
+  assert(false && "Never Reached!");
+}
+
 int main(int argc, char **argv) {
   std::string LOAD_DIR = ".";
 
@@ -18,3 +36,4 @@ int main(int argc, char **argv) {
 
   return EXIT_SUCCESS;
 }
+

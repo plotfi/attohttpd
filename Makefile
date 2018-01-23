@@ -1,5 +1,5 @@
 CC = clang++-5.0
-OPT = -O0 -g
+OPT = -O0 -g --std=c++11
 LIBS = -lpthread
 TARGET = attohttpd
 MISC = Makefile
@@ -11,3 +11,4 @@ all:
 
 clean:
 	rm -f $(TARGET)
+

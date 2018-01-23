@@ -5,9 +5,11 @@
 #define SERVER_URL "http://www.puyan.org"
 
 #include <cstdio>
+#include <cstddef>
 #include <cstdlib>
 #include <cstring>
 #include <cassert>
+#include <iostream>
 #include <unistd.h>
 #include <pthread.h>
 #include <inttypes.h>
@@ -45,3 +47,4 @@ template <typename T> T *CheckedMalloc(size_t n) {
 }
 
 #endif /* _UHTTP_H_ */
+
