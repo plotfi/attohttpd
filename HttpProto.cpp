@@ -199,9 +199,10 @@ int http_proto(FILE *socket, const char *request) {
 
 } // end anonymous namespace
 
-void HttpProto(int socket, const char *request) {
+int HttpProto(int socket, const char *request) {
   FILE *socketFile = fdopen(socket, "w");
   http_proto(socketFile, request);
   fclose(socketFile);
+  return socket;
 }
 

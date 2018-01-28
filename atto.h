@@ -1,5 +1,5 @@
-#ifndef _UHTTP_H_
-#define _UHTTP_H_
+#ifndef _ATTO_H_
+#define _ATTO_H_
 
 #define REUSE_PORT 1
 #define MAXPENDING 5  // Max Requests
@@ -18,10 +18,7 @@
 #include <unistd.h>
 #include <inttypes.h>
 
-int ContructTCPSocket(uint16_t portNumber);
-int AcceptConnection(int serverSocket);
-std::string ReceiveFromSocket(int socket);
-void HttpProto(int socket, const char *request);
+int HttpProto(int socket, const char *request);
 
 #define CHECK(check, message) \
   do { if ((check) < 0) { \
@@ -30,5 +27,5 @@ void HttpProto(int socket, const char *request);
       exit(EXIT_FAILURE); \
   } } while (false)
 
-#endif /* _UHTTP_H_ */
+#endif /* _ATTO_H_ */
 
