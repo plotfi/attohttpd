@@ -6,8 +6,6 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 
-#define RFC1123FMT "%a, %d %b %Y %H:%M:%S GMT"
-
 namespace {
 
 std::string get_mime_type(const char *name) {
@@ -81,67 +79,59 @@ void strencode(char *to, size_t tosize, const char *from) {
   *to = '\0';
 }
 
-void file_details(char *dir, char *name, FILE *socket) {
-  char encoded_name[1000];
-  char path[2000];
-  struct stat sb;
-  char timestr[16];
-
-  strencode(encoded_name, sizeof(encoded_name), name);
-  snprintf(path, sizeof(path), "%s/%s", dir, name);
-
-  if (lstat(path, &sb) < 0) {
-    fprintf(socket, "<a href=\"%s\">%-32.32s</a>    ???\n", encoded_name,
-            name);
-  } else {
-    strftime(timestr, sizeof(timestr), "%d%b%Y %H:%M", localtime(&sb.st_mtime));
-    fprintf(socket, "<a href=\"%s\">%-32.32s</a>    %15s %14lld\n",
-            encoded_name, name, timestr, (long long)sb.st_size);
-  }
+std::string getTimeBuf(const struct tm *time) {
+  if (!time) return nullptr;
+  char timebuf[100];
+  #define RFC1123FMT "%a, %d %b %Y %H:%M:%S GMT"
+  strftime(timebuf, sizeof(timebuf), RFC1123FMT, time);
+  std::string timeStr = std::string(timebuf);
+  return timeStr;
 }
 
-void send_headers(int status, std::string title, std::string extra_header,
-                  std::string mime_type, off_t length, time_t mod,
-                  FILE *socket) {
-  time_t now;
-  char timebuf[100];
+void file_details(FILE *socket, const char *dir, const char *name) {
+  char path[strlen(dir) + strlen(name) + 2 /* '/' + '\0' */];
+  sprintf(path, "%s/%s", dir, name);
 
-  fprintf(socket, "%s %d %s\015\012", "HTTP/1.1", status, title.c_str());
-  fprintf(socket, "Server: %s\015\012", SERVER_NAME);
-
-  now = time((time_t *)0);
-
-  strftime(timebuf, sizeof(timebuf), RFC1123FMT, gmtime(&now));
-  fprintf(socket, "Date: %s\015\012", timebuf);
-
-  if (extra_header != "")
-    fprintf(socket, "%s\015\012", extra_header.c_str());
-  if (mime_type != "")
-    fprintf(socket, "Content-Type: %s\015\012", mime_type.c_str());
-  if (length >= 0)
-    fprintf(socket, "Content-Length: %lld\015\012", (long long)length);
-  if (mod != (time_t)-1) {
-    strftime(timebuf, sizeof(timebuf), RFC1123FMT, gmtime(&mod));
-    fprintf(socket, "Last-Modified: %s\015\012", timebuf);
+  struct stat sb;
+  if (lstat(path, &sb) < 0) {
+    fprintf(socket, "<a href=\"%s\">%s</a>INVALID PATH\n", name, name);
+    return;
   }
-  fprintf(socket, "Connection: close\015\012");
-  fprintf(socket, "\015\012");
+
+  char encodeName[1000];
+  strencode(encodeName, sizeof(encodeName), name);
+  std::string timeStr = getTimeBuf(localtime(&sb.st_mtime));
+  fprintf(socket, "<a href=\"%s\">%-32.32s</a> %15s %14lld\n", encodeName, name,
+          timeStr.c_str(), (long long)sb.st_size);
+}
+
+void send_headers(int status, std::string title, std::string extraHeader,
+                  std::string mimeType, off_t len, time_t mod, FILE *socket) {
+  time_t now = time(nullptr);
+  fprintf(socket, "%s %d %s\r\n", "HTTP/1.1", status, title.c_str());
+  fprintf(socket, "Server: %s\r\n", SERVER_NAME);
+  fprintf(socket, "Date: %s\r\n", getTimeBuf(gmtime(&now)).c_str());
+  if (extraHeader != "")
+    fprintf(socket, "%s\r\n", extraHeader.c_str());
+  if (mimeType != "")
+    fprintf(socket, "Content-Type: %s\r\n", mimeType.c_str());
+  if (len >= 0)
+    fprintf(socket, "Content-Length: %lld\r\n", (long long)len);
+  if (mod != (time_t)-1)
+    fprintf(socket, "Last-Modified: %s\r\n", getTimeBuf(gmtime(&mod)).c_str());
+  fprintf(socket, "Connection: close\r\n\r\n");
 }
 
 int send_error(int status, std::string title, std::string extra_header,
                std::string text, FILE *socket) {
   send_headers(status, title, extra_header, "text/html", -1, -1, socket);
-
-  fprintf(socket,
-          "<html><head><title>%d %s</title></head>\n<body "
-          "bgcolor=\"#cc9999\"><h4>%d %s</h4>\n",
-          status, title.c_str(), status, title.c_str());
+  fprintf(socket, "<html><head><title>%d %s</title></head>\n<body "
+          "bgcolor=\"#cc9999\"><h4>%d %s</h4>\n", status, title.c_str(), status,
+          title.c_str());
   fprintf(socket, "%s\n", text.c_str());
   fprintf(socket, "<hr>\n<address><a href=\"%s\">%s</a></address>\n",
           SERVER_URL, SERVER_NAME);
   fprintf(socket, "</body></html>\n");
-
-  fflush(socket);
   return status;
 }
 
@@ -158,11 +148,11 @@ int doFile(const char *filename, off_t length, time_t mod, FILE *socket) {
   return 200;
 }
 
-int http_proto(FILE *socket, char *request) {
-  char method[100], path[1000], protocol[100], idx[2000], location[2000];
+int http_proto(FILE *socket, const char *request) {
+  char method[100], path[1000], protocol[100];
   struct stat sb;
 
-  if (strlen(request) >= BUFFERSIZE)
+  if (!request || strlen(request) < strlen("GET / HTTP/1.1"))
     return send_error(403, "Bad Request", "", "No request found.", socket);
   if (sscanf(request, "%[^ ] %[^ ] %[^ ]", method, path, protocol) != 3)
     return send_error(400, "Bad Request", "", "Can't parse request.", socket);
@@ -192,12 +182,14 @@ int http_proto(FILE *socket, char *request) {
 
   if (S_ISDIR(sb.st_mode)) {
 
+    char location[strlen(file) + 2 /* '/' + '\0' */];
     if (file[len - 1] != '/') {
-      snprintf(location, sizeof(location), "Location: %s/", path);
-      return send_error(302, "Found", location, "Dirs must end with /", socket);
+      sprintf(location, "%s/", file);
+      file = location;
     }
 
-    snprintf(idx, sizeof(idx), "%sindex.html", file);
+    char idx[strlen(file) + strlen("index.html") + 1];
+    sprintf(idx, "%sindex.html", file);
     if (stat(idx, &sb) >= 0)
       return doFile(idx /* filename */, sb.st_size, sb.st_mtime, socket);
 
@@ -209,14 +201,17 @@ int http_proto(FILE *socket, char *request) {
 
     struct dirent **dl;
     int n = scandir(file, &dl, NULL, alphasort);
+    if (n < 0)
+      perror("scandir");
     for (unsigned i = 0; i < n; ++i) {
-      file_details(file, dl[i]->d_name, socket);
+      file_details(socket, file, dl[i]->d_name);
       free(dl[i]);
     }
-    if (n < 0) { perror("scandir"); } else { free(dl); }
 
-    fprintf(socket, "</pre>\n<hr>\n<address><a "
-            "href=\"%s\">%s</a></address>\n</body></html>\n",
+    free(dl);
+
+    fprintf(socket, "</pre>\n<hr>\n<address>"
+            "<a href=\"%s\">%s</a></address>\n</body></html>\n",
             SERVER_URL, SERVER_NAME);
     return 200;
   }
@@ -226,7 +221,7 @@ int http_proto(FILE *socket, char *request) {
 
 } // end anonymous namespace
 
-int HttpProtoWrapper(int socket, char *request) {
+int HttpProtoWrapper(int socket, const char *request) {
   FILE *socketFile = fdopen(socket, "w");
   fflush(socketFile);
   int result = http_proto(socketFile, request);

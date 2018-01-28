@@ -1,2 +1,2 @@
 # attohttpd
-500 Line HTTP Server Written in C++
+400 Line HTTP Server Written in C++

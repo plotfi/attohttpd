@@ -1,50 +1,34 @@
 #ifndef _UHTTP_H_
 #define _UHTTP_H_
 
-#define _VERBOSE_ 0
 #define REUSE_PORT 1
-#define MAXPENDING 5    // Max Requests
-#define BUFFERSIZE 1024 // Max Recv Buffer Size
+#define MAXPENDING 5  // Max Requests
+#define BUFFERLEN 100 // recv size per iter
 #define SERVER_NAME "attohttpd"
 #define SERVER_URL "http://www.puyan.org"
-#define VPRINTF(x) if (_VERBOSE_) { printf x; }
 
 #include <cstdio>
+#include <cstring>
 #include <cstddef>
 #include <cstdlib>
+#include <cstdint>
 #include <cstring>
 #include <cassert>
 #include <iostream>
 #include <unistd.h>
-#include <pthread.h>
 #include <inttypes.h>
-
-#include <queue>
-#include <vector>
-#include <string>
 
 int ContructTCPSocket(uint16_t portNumber);
 int AcceptConnection(int serverSocket);
-char *ReceiveFromSocket(int socket, char *buffer, size_t len);
-int HttpProtoWrapper(int socket, char *request);
-
-template <typename T> T *CheckedMalloc(size_t n) {
-  T *result = (T*)malloc(n);
-  if (!result) {
-    printf("Malloc failed. Exiting.\n");
-    exit(EXIT_FAILURE);
-  }
-  return result;
-}
+std::string ReceiveFromSocket(int socket);
+int HttpProtoWrapper(int socket, const char *request);
 
 #define CHECK(check, message) \
-  do { \
-    if ((check) < 0) { \
+  do { if ((check) < 0) { \
       fprintf(stderr, "%s failed: Error on line %d.\n", (message), __LINE__); \
       perror(message); \
       exit(EXIT_FAILURE); \
-    } \
-  } while (false)
+  } } while (false)
 
 #endif /* _UHTTP_H_ */
 
