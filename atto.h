@@ -21,7 +21,7 @@
 int ContructTCPSocket(uint16_t portNumber);
 int AcceptConnection(int serverSocket);
 std::string ReceiveFromSocket(int socket);
-int HttpProtoWrapper(int socket, const char *request);
+void HttpProto(int socket, const char *request);
 
 #define CHECK(check, message) \
   do { if ((check) < 0) { \
