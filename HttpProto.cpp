@@ -2,102 +2,40 @@
 #include <time.h>
 #include <ctype.h>
 #include <dirent.h>
-#include <sys/stat.h>
-#include <sys/types.h>
 
 namespace {
-
 std::string get_mime_type(const char *name) {
   const char *dot = strrchr(name, '.');
-  if (dot && !strcmp(dot, ".html")) return "text/html; charset=iso-8859-1";
-  if (dot && !strcmp(dot, ".htm"))  return "text/html; charset=iso-8859-1";
-  if (dot && !strcmp(dot, ".jpg"))  return "image/jpeg";
-  if (dot && !strcmp(dot, ".jpeg")) return "image/jpeg";
-  if (dot && !strcmp(dot, ".gif"))  return "image/gif";
-  if (dot && !strcmp(dot, ".png"))  return "image/png";
-  if (dot && !strcmp(dot, ".css"))  return "text/css";
-  if (dot && !strcmp(dot, ".au"))   return "audio/basic";
-  if (dot && !strcmp(dot, ".wav"))  return "audio/wav";
-  if (dot && !strcmp(dot, ".avi"))  return "video/x-msvideo";
-  if (dot && !strcmp(dot, ".mov"))  return "video/quicktime";
-  if (dot && !strcmp(dot, ".qt"))   return "video/quicktime";
-  if (dot && !strcmp(dot, ".mpeg")) return "video/mpeg";
-  if (dot && !strcmp(dot, ".mpe"))  return "video/mpeg";
-  if (dot && !strcmp(dot, ".vrml")) return "model/vrml";
-  if (dot && !strcmp(dot, ".wrl"))  return "model/vrml";
-  if (dot && !strcmp(dot, ".midi")) return "audio/midi";
-  if (dot && !strcmp(dot, ".mid"))  return "audio/midi";
-  if (dot && !strcmp(dot, ".mp3"))  return "audio/mpeg";
-  if (dot && !strcmp(dot, ".m4a"))  return "audio/mp4";
-  if (dot && !strcmp(dot, ".pdf"))  return "application/pdf";
-  if (dot && !strcmp(dot, ".ogg"))  return "application/ogg";
-  if (dot && !strcmp(dot, ".pac"))  return "application/x-ns-proxy-autoconfig";
+  if (dot && !strncmp(dot, ".html", 4)) return "text/html; charset=iso-8859-1";
+  if (dot && !strncmp(dot, ".midi", 4)) return "audio/midi";
+  if (dot && !strncmp(dot, ".jpeg", 4)) return "image/jpeg";
+  if (dot && !strncmp(dot, ".mpeg", 4)) return "video/mpeg";
+  if (dot && !strncmp(dot, ".gif" , 4)) return "image/gif";
+  if (dot && !strncmp(dot, ".png" , 4)) return "image/png";
+  if (dot && !strncmp(dot, ".css" , 4)) return "text/css";
+  if (dot && !strncmp(dot, ".au"  , 3)) return "audio/basic";
+  if (dot && !strncmp(dot, ".wav" , 4)) return "audio/wav";
+  if (dot && !strncmp(dot, ".avi" , 4)) return "video/x-msvideo";
+  if (dot && !strncmp(dot, ".mov" , 4)) return "video/quicktime";
+  if (dot && !strncmp(dot, ".mp3" , 4)) return "audio/mpeg";
+  if (dot && !strncmp(dot, ".m4a" , 4)) return "audio/mp4";
+  if (dot && !strncmp(dot, ".pdf" , 4)) return "application/pdf";
+  if (dot && !strncmp(dot, ".ogg" , 4)) return "application/ogg";
   return "text/plain; charset=iso-8859-1";
 }
 
-int hexit(char c) {
-  if (c >= '0' && c <= '9') return c - '0';
-  if (c >= 'a' && c <= 'f') return c - 'a' + 10;
-  if (c >= 'A' && c <= 'F') return c - 'A' + 10;
-  assert(false && "Shouldn't happen, we're guarded by isxdigit()");
-  return 0;
-}
-
-void strdecode(char *to, char *from) {
-  for (; *from != '\0'; ++to, ++from) {
-    if (from[0] == '%' && isxdigit(from[1]) && isxdigit(from[2])) {
-      *to = hexit(from[1]) * 16 + hexit(from[2]);
-      from += 2;
-    } else {
-      *to = *from;
-    }
-  }
-  *to = '\0';
-}
-
-void strencode(char *to, size_t tosize, const char *from) {
-  for (int tolen = 0; *from != '\0' && tolen + 4 < tosize; ++from) {
-    if (isalnum(*from) || strchr("/_.-~", *from) != (char *)0) {
-      *to = *from;
-      ++to;
-      ++tolen;
-    } else {
-      sprintf(to, "%%%02x", (int)*from & 0xff);
-      to += 3;
-      tolen += 3;
-    }
-  }
-  *to = '\0';
-}
-
 std::string getTimeBuf(const struct tm *time) { // RFC1123FMT format
-  if (!time) return nullptr;
+  if (!time) return "";
   char timebuf[100];
   strftime(timebuf, sizeof(timebuf), "%a, %d %b %Y %H:%M:%S GMT", time);
   return std::string(timebuf);
-}
-
-void file_details(FILE *socket, const char *dir, const char *name) {
-  char path[strlen(dir) + strlen(name) + 2 /* '/' + '\0' */];
-  sprintf(path, "%s/%s", dir, name);
-
-  struct stat sb;
-  if (lstat(path, &sb) < 0) {
-    fprintf(socket, "<a href=\"%s\">%s</a>INVALID PATH\n", name, name);
-    return;
-  }
-
-  char encodeName[1000];
-  strencode(encodeName, sizeof(encodeName), name);
-  fprintf(socket, "<a href=\"%s\">%-32.32s</a> %15s %14lld\n", encodeName, name,
-          getTimeBuf(localtime(&sb.st_mtime)).c_str(), (long long)sb.st_size);
 }
 
 void send_headers(int status, std::string title, std::string extraHeader,
                   std::string mimeType, off_t len, time_t mod, FILE *socket) {
   time_t now = time(nullptr);
   fprintf(socket, "%s %d %s\r\n", "HTTP/1.1", status, title.c_str());
-  fprintf(socket, "Server: %s\r\n", SERVER_NAME);
+  fprintf(socket, "Server: %s\r\n", HTTPD);
   fprintf(socket, "Date: %s\r\n", getTimeBuf(gmtime(&now)).c_str());
   if (extraHeader != "") fprintf(socket, "%s\r\n", extraHeader.c_str());
   if (mimeType != "") fprintf(socket, "Content-Type: %s\r\n", mimeType.c_str());
@@ -107,26 +45,34 @@ void send_headers(int status, std::string title, std::string extraHeader,
   fprintf(socket, "Connection: close\r\n\r\n");
 }
 
+int writeHtmlEnd(int status, FILE *socket) {
+  fprintf(socket, "</pre><a href=\"%s\">%s</a></body></html>\n", URL, HTTPD);
+  return status;
+}
+
 int send_error(int status, std::string title, std::string extra_header,
                std::string text, FILE *socket) {
   send_headers(status, title, extra_header, "text/html", -1, -1, socket);
   fprintf(socket, "<html><head><title>%d %s</title></head>\n<body "
-          "bgcolor=\"#cc9999\"><h4>%d %s</h4>\n", status, title.c_str(), status,
-          title.c_str());
-  fprintf(socket, "%s\n<hr>\n<address><a href=\"%s\">%s</a></address>"
-          "</body></html>\n", text.c_str(), SERVER_URL, SERVER_NAME);
-  return status;
+          "bgcolor=\"#cc9999\"><h4>%d %s</h4><pre>%s\n", status, title.c_str(),
+          status, title.c_str(), text.c_str());
+  return writeHtmlEnd(status, socket);
 }
 
 int doFile(const char *filename, off_t length, time_t mod, FILE *socket) {
-  FILE *fp = fopen(filename, "r");
-  if (!fp) return send_error(403, "Forbidden", "", "Protected File.", socket);
-  send_headers(200, "Ok", "", get_mime_type(filename), length, mod, socket);
+  std::ifstream ifs(filename, std::ios::in|std::ios::binary|std::ios::ate);
+  if (!ifs.is_open())
+    return send_error(403, "Forbidden", "", "Protected File.", socket);
 
-  int ich;
-  while (fp && (ich = getc(fp)) != EOF)
-    fprintf(socket, "%c", ich);
-  fclose(fp);
+  std::streampos pos = ifs.tellg();
+  char buf[static_cast<std::string::size_type>(pos)];
+  bzero(buf, sizeof(buf));
+  ifs.seekg(0, std::ios::beg);
+  ifs.read(buf, pos);
+  ifs.close();
+
+  send_headers(200, "Ok", "", get_mime_type(filename), length, mod, socket);
+  fwrite(buf, sizeof(char), sizeof(buf), socket);
   fflush(socket);
   return 200;
 }
@@ -143,66 +89,49 @@ int http_proto(FILE *socket, const char *request) {
   if (path[0] != '/')
     return send_error(400, "Bad Request", "", "Bad filename.", socket);
 
-  char *file = &(path[1]);
-  strdecode(file, file);
-  #pragma clang diagnostic push
-  #pragma clang diagnostic ignored "-Wwritable-strings"
-  if (file[0] == '\0') file = "./";
-  #pragma clang diagnostic pop
+  std::string fileStr = &(path[1]);
+  if (fileStr.c_str()[0] == '\0') fileStr = "./";
+  const char *file = fileStr.c_str();
   size_t len = strlen(file);
-
-  if (file[0] == '/' || strcmp(file, "..") == 0 ||
-      strncmp(file, "../", 3) == 0 || strstr(file, "/../") != (char *)0 ||
-      strcmp(&(file[len - 3]), "/..") == 0)
-    return send_error(400, "Bad Request", "", "Illegal filename.", socket);
-
   struct stat sb;
+
+  if (file[0] == '/' || !strcmp(file, "..") || !strncmp(file, "../", 3) ||
+      strstr(file, "/../") != (char *)0 || !strcmp(&(file[len - 3]), "/.."))
+    return send_error(400, "Bad Request", "", "Illegal filename.", socket);
   if (stat(file, &sb) < 0)
     return send_error(404, "Not Found", "", "File not found.", socket);
 
-  if (S_ISDIR(sb.st_mode)) {
+  std::string dir = std::string(file) + ((file[len - 1] != '/') ? "/" : "");
+  fileStr = S_ISDIR(sb.st_mode) ? (dir + "index.html") : file;
 
-    char location[strlen(file) + 2 /* '/' + '\0' */];
-    if (file[len - 1] != '/') {
-      sprintf(location, "%s/", file);
-      file = location;
-    }
+  if (!S_ISDIR(sb.st_mode) || (stat(fileStr.c_str(), &sb) >= 0))
+    return doFile(fileStr.c_str(), sb.st_size, sb.st_mtime, socket);
 
-    char idx[strlen(file) + strlen("index.html") + 1];
-    sprintf(idx, "%sindex.html", file);
-    if (stat(idx, &sb) >= 0)
-      return doFile(idx /* filename */, sb.st_size, sb.st_mtime, socket);
-
-    send_headers(200, "Ok", "", "text/html", -1, sb.st_mtime, socket);
-
-    fprintf(socket, "<html><head><title>Index of %s</title></head>\n<body "
-            "bgcolor=\"lightblue\"><h4>Index of %s</h4>\n<pre>\n",
-            file, file);
-
-    struct dirent **dl;
-    int n = scandir(file, &dl, NULL, alphasort);
-    if (n < 0)
-      perror("scandir");
-    for (unsigned i = 0; i < n; ++i) {
-      file_details(socket, file, dl[i]->d_name);
-      free(dl[i]);
-    }
-
-    free(dl);
-    fprintf(socket, "</pre>\n<hr>\n<address><a href=\"%s\">%s</a>"
-            "</address>\n</body></html>\n", SERVER_URL, SERVER_NAME);
-    return 200;
+  send_headers(200, "Ok", "", "text/html", -1, sb.st_mtime, socket);
+  fprintf(socket, "<html><head><title>Index of %s</title></head>\n<body bgcolor"
+          "=\"lightblue\"><h4>Index of %s</h4><pre>", dir.c_str(), dir.c_str());
+  struct dirent **dl;
+  int n = scandir(dir.c_str(), &dl, NULL, alphasort);
+  for (unsigned i = 0; i < n; ++i) {
+    fprintf(socket, "<a href=\"%s\">%s</a>\n", dl[i]->d_name, dl[i]->d_name);
+    free(dl[i]);
   }
-
-  return doFile(file, sb.st_size, sb.st_mtime, socket);
+  free(dl);
+  return writeHtmlEnd(200, socket);
 }
-
 } // end anonymous namespace
 
-int HttpProto(int socket, const char *request) {
+int HttpProto(int socket) {
+  std::string requestStr("");
+  for (char buffer[BUFFERLEN];;) {
+    bzero(buffer, BUFFERLEN);
+    int newBytes = read(socket, buffer, BUFFERLEN);
+    requestStr += (newBytes > 0) ? std::string(buffer) : "";
+    if (newBytes < BUFFERLEN) break;
+  }
+
   FILE *socketFile = fdopen(socket, "w");
-  http_proto(socketFile, request);
+  http_proto(socketFile, requestStr.c_str());
   fclose(socketFile);
   return socket;
 }
-

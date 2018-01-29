@@ -5,8 +5,10 @@
 #include <thread>
 #include <condition_variable>
 
+namespace {
+
 #define THREAD_FUNCTION(NAME) template <typename T, typename P, typename C> \
-  void NAME(SyncQueue<T, P, C> *syncQueue)
+  static void NAME(SyncQueue<T, P, C> *syncQueue)
 
 template <class T, class TP, class TC> class SyncQueue {
   private:
@@ -54,4 +56,4 @@ template <class T, class TP, class TC> class SyncQueue {
       return t;
     }
 };
-
+} // end anonymous namespace

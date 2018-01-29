@@ -2,31 +2,17 @@
 #include "SyncQueue.h"
 #include "Networking.h"
 
-std::string ReceiveFromSocket(int socket) {
-  char buffer[BUFFERLEN];
-  std::string resultStr("");
-  for (;;) {
-    bzero(buffer, BUFFERLEN);
-    int newBytes = recv(socket, buffer, BUFFERLEN, 0);
-    resultStr += (newBytes > 0) ? std::string(buffer) : "";
-    if (newBytes < BUFFERLEN) break;
-  }
-  return resultStr;
-}
-
 THREAD_FUNCTION(producer) {
-  printf("[PRODUCER] Listening\n");
-  for (;;) {
+  for (printf("[PRODUCER] Listening\n");;) {
     printf("[PRODUCER] Waiting to accept a connection\n");
     syncQueue->enqueue(syncQueue->getProducerToken()->AcceptConnection());
   }
 }
 
 THREAD_FUNCTION(consumer) {
-  for (printf("[CONSUMER] Consumer started\n");;) {
-    int S = syncQueue->dequeue();
+  for (int S = -1;;S = syncQueue->dequeue()) {
     printf("[CONSUMER] Handling Socket %d.\n", S);
-    if (S >= 0) close(HttpProto(S, ReceiveFromSocket(S).c_str()));
+    if (S >= 0) close(HttpProto(S));
   }
 }
 
@@ -40,4 +26,3 @@ int main(int argc, char **argv) {
   while(getchar() != 'q') printf("* Server Started, Enter q to Quit *\n\n");
   return EXIT_SUCCESS;
 }
-
