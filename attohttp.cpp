@@ -18,6 +18,7 @@
 #include <unistd.h>
 #include <dirent.h>
 #include <inttypes.h>
+#include <functional>
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <arpa/inet.h>  // Address Structs
@@ -64,7 +65,7 @@ std::string getTimeBuf(const struct tm *time) { // RFC1123FMT format
 }
 
 void send_headers(int status, std::string title, std::string extraHeader,
-                  std::string mimeType, off_t len, time_t mod, FILE *socket) {
+                  std::string mimeType, off_t len, FILE *socket) {
   time_t now = time(nullptr);
   fprintf(socket, "%s %d %s\r\n", "HTTP/1.1", status, title.c_str());
   fprintf(socket, "Server: %s\r\n", HTTPD);
@@ -72,8 +73,6 @@ void send_headers(int status, std::string title, std::string extraHeader,
   if (extraHeader != "") fprintf(socket, "%s\r\n", extraHeader.c_str());
   if (mimeType != "") fprintf(socket, "Content-Type: %s\r\n", mimeType.c_str());
   if (len >= 0) fprintf(socket, "Content-Length: %lld\r\n", (long long)len);
-  if (mod != (time_t)-1)
-    fprintf(socket, "Last-Modified: %s\r\n", getTimeBuf(gmtime(&mod)).c_str());
   fprintf(socket, "Connection: close\r\n\r\n");
 }
 
@@ -84,14 +83,14 @@ int writeHtmlEnd(int status, FILE *socket) {
 
 int send_error(int status, std::string title, std::string extra_header,
                std::string text, FILE *socket) {
-  send_headers(status, title, extra_header, "text/html", -1, -1, socket);
+  send_headers(status, title, extra_header, "text/html", -1, socket);
   fprintf(socket, "<html><head><title>%d %s</title></head>\n<body "
           "bgcolor=\"#cc9999\"><h4>%d %s</h4><pre>%s\n", status, title.c_str(),
           status, title.c_str(), text.c_str());
   return writeHtmlEnd(status, socket);
 }
 
-int doFile(const char *filename, off_t length, time_t mod, FILE *socket) {
+int doFile(const char *filename, off_t length, FILE *socket) {
   std::ifstream ifs(filename, std::ios::in|std::ios::binary|std::ios::ate);
   if (!ifs.is_open())
     return send_error(403, "Forbidden", "", "Protected File.", socket);
@@ -103,7 +102,7 @@ int doFile(const char *filename, off_t length, time_t mod, FILE *socket) {
   ifs.read(buf, pos);
   ifs.close();
 
-  send_headers(200, "Ok", "", get_mime_type(filename), length, mod, socket);
+  send_headers(200, "Ok", "", get_mime_type(filename), length, socket);
   fwrite(buf, sizeof(char), sizeof(buf), socket);
   fflush(socket);
   return 200;
@@ -137,9 +136,9 @@ int http_proto(FILE *socket, const char *request) {
   fileStr = S_ISDIR(sb.st_mode) ? (dir + "index.html") : file;
 
   if (!S_ISDIR(sb.st_mode) || (stat(fileStr.c_str(), &sb) >= 0))
-    return doFile(fileStr.c_str(), sb.st_size, sb.st_mtime, socket);
+    return doFile(fileStr.c_str(), sb.st_size, socket);
 
-  send_headers(200, "Ok", "", "text/html", -1, sb.st_mtime, socket);
+  send_headers(200, "Ok", "", "text/html", -1, socket);
   fprintf(socket, "<html><head><title>Index of %s</title></head>\n<body bgcolor"
           "=\"lightblue\"><h4>Index of %s</h4><pre>", dir.c_str(), dir.c_str());
   struct dirent **dl;
@@ -201,47 +200,17 @@ class Networking {
     }
 };
 
-#define THREAD_FUNCTION(NAME) template <typename T, typename P, typename C> \
-  static void NAME(SyncQueue<T, P, C> *syncQueue)
-
-template <class T, class TP, class TC> class SyncQueue {
+template <class T> class SyncQueue {
   private:
-    void(*P)(SyncQueue<T, TP, TC>*);
-    void(*C)(SyncQueue<T, TP, TC>*);
-    TP ptoken;
-    TC ctoken;
-    const size_t maxThreads;
-
     std::mutex mutex;
     std::condition_variable cv;
-    std::vector<std::thread> consumers;
-    std::thread producer;
     std::queue<T> syncQueue;
-    SyncQueue() { }
-    SyncQueue(const SyncQueue&) { }
-
-    void resizeConsumers() {
-      for (int n = syncQueue.size() - consumers.size();
-           (0 < n) && (consumers.size() < maxThreads); n--)
-        consumers.push_back(std::move(std::thread(C, this)));
-    }
-
   public:
-    SyncQueue(void(*P)(SyncQueue<T, TP, TC>*), void(*C)(SyncQueue<T, TP, TC>*),
-              TP ptoken = nullptr, TC ctoken = nullptr, size_t n = 256):
-      P(P), C(C), ptoken(ptoken), ctoken(ctoken), maxThreads(n) { }
-
-    void start() { producer = std::thread(P, this); }
-    TP getProducerToken() const { return ptoken; }
-    TC getConsumerToken() const { return ctoken; }
-
     void enqueue(T t) {
       std::unique_lock<std::mutex> lock(mutex);
       syncQueue.push(t);
-      resizeConsumers();
       cv.notify_all();
     }
-
     T dequeue() {
       std::unique_lock<std::mutex> lock(mutex);
       while (!syncQueue.size()) cv.wait(lock);
@@ -250,29 +219,46 @@ template <class T, class TP, class TC> class SyncQueue {
       return t;
     }
 };
+
+class ThreadPool {
+  private:
+    std::vector<std::thread> consumers;
+    std::thread producer;
+    ThreadPool() { }
+    ThreadPool(const ThreadPool&) { }
+  public:
+    ThreadPool(std::function<void()> P, std::function<void()> C, size_t n = 8) {
+      producer = std::thread(P);
+      for (unsigned i = 0; i < n; ++i)
+        consumers.push_back(std::move(std::thread(C)));
+    }
+};
+
 } // end anonymous namespace
-
-THREAD_FUNCTION(producer) {
-  for (printf("[PRODUCER] Listening\n");;) {
-    printf("[PRODUCER] Waiting to accept a connection\n");
-    syncQueue->enqueue(syncQueue->getProducerToken()->AcceptConnection());
-  }
-}
-
-THREAD_FUNCTION(consumer) {
-  for (int S = -1;;S = syncQueue->dequeue()) {
-    printf("[CONSUMER] Handling Socket %d.\n", S);
-    if (S >= 0) close(HttpProto(S));
-  }
-}
 
 int main(int argc, char **argv) {
   std::string LOAD_DIR = ".";
   printf("* Beginning Server, Root Directory: %s\n", LOAD_DIR.c_str());
   CHECK(chdir(LOAD_DIR.c_str()), "Error setting home directory.\n");
   Networking N(1337);
-  SyncQueue<int, Networking*, void*> sQueue(producer, consumer, &N, nullptr);
-  sQueue.start();
+  SyncQueue<int> sQueue;
+
+  auto producer = [&]() {
+    for (printf("[PRODUCER] Listening\n");;) {
+      printf("[PRODUCER] Waiting to accept a connection\n");
+      sQueue.enqueue(N.AcceptConnection());
+    }
+  };
+
+  auto consumer = [&]() {
+    for (int S = -1;;S = sQueue.dequeue()) {
+      printf("[CONSUMER] Handling Socket %d.\n", S);
+      if (S >= 0) close(HttpProto(S));
+    }
+  };
+
+  ThreadPool pool(producer, consumer);
+
   while(getchar() != 'q') printf("* Server Started, Enter q to Quit *\n\n");
   return EXIT_SUCCESS;
 }
