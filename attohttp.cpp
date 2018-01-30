@@ -1,7 +1,39 @@
-#include "atto.h"
+#define REUSE_PORT 1
+#define MAXPENDING 5  // Max Requests
+#define BUFFERLEN 100 // recv size per iter
+#define HTTPD "attohttpd"
+#define URL "http://www.puyan.org"
+
 #include <time.h>
+#include <cstdio>
 #include <ctype.h>
+#include <cstring>
+#include <cstddef>
+#include <cstdlib>
+#include <cstdint>
+#include <cstring>
+#include <cassert>
+#include <fstream>
+#include <iostream>
+#include <unistd.h>
 #include <dirent.h>
+#include <inttypes.h>
+#include <sys/stat.h>
+#include <sys/types.h>
+#include <arpa/inet.h>  // Address Structs
+#include <netinet/in.h> // IP Datatypes
+#include <sys/socket.h> // Socket Functions
+#include <mutex>
+#include <queue>
+#include <vector>
+#include <thread>
+#include <condition_variable>
+
+#define CHECK(check, message) \
+  do { if ((check) < 0) { \
+      fprintf(stderr, "%s failed: Error on line %d.\n", (message), __LINE__); \
+      perror(message); exit(EXIT_FAILURE); \
+  } } while (false)
 
 namespace {
 std::string get_mime_type(const char *name) {
@@ -119,7 +151,6 @@ int http_proto(FILE *socket, const char *request) {
   free(dl);
   return writeHtmlEnd(200, socket);
 }
-} // end anonymous namespace
 
 int HttpProto(int socket) {
   std::string requestStr("");
@@ -134,4 +165,114 @@ int HttpProto(int socket) {
   http_proto(socketFile, requestStr.c_str());
   fclose(socketFile);
   return socket;
+}
+
+class Networking {
+  private:
+    const uint16_t portNumber;
+    int ssock; // Server Socket
+
+    Networking(): portNumber(0), ssock(-1) { }
+    Networking(const Networking&): portNumber(0) { }
+
+    int ContructTCPSocket() {
+      int O = REUSE_PORT;                        // reuse port sockopt
+      struct sockaddr_in saddr;                  // Server Socket addr
+      bzero(&saddr, sizeof(saddr));              // Zero serve  struct
+      saddr.sin_family = AF_INET;                // Inet addr family
+      saddr.sin_addr.s_addr = htonl(INADDR_ANY); // Any incoming iface
+      saddr.sin_port = htons(portNumber);        // Local (server) port
+      CHECK(ssock = socket(PF_INET, SOCK_STREAM, IPPROTO_TCP), "socket()");
+      CHECK(setsockopt(ssock, SOL_SOCKET, SO_REUSEADDR, &O, sizeof(O)), "opt");
+      CHECK(bind(ssock, (struct sockaddr *)&saddr, sizeof(saddr)), "bind()");
+      CHECK(listen(ssock, MAXPENDING), "listen()");
+      return ssock;
+    }
+    int ServerSocket() { return ssock >= 0 ? ssock : ContructTCPSocket(); }
+
+  public:
+    Networking(uint16_t portNumber): portNumber(portNumber), ssock(-1) { }
+    int AcceptConnection() {
+      struct sockaddr_in addr;
+      unsigned len = sizeof(addr);
+      int clientSocket = accept(ServerSocket(), (struct sockaddr *)&addr, &len);
+      printf("Handling client %s\n", inet_ntoa(addr.sin_addr));
+      return (clientSocket < 0) ? -1 : clientSocket;
+    }
+};
+
+#define THREAD_FUNCTION(NAME) template <typename T, typename P, typename C> \
+  static void NAME(SyncQueue<T, P, C> *syncQueue)
+
+template <class T, class TP, class TC> class SyncQueue {
+  private:
+    void(*P)(SyncQueue<T, TP, TC>*);
+    void(*C)(SyncQueue<T, TP, TC>*);
+    TP ptoken;
+    TC ctoken;
+    const size_t maxThreads;
+
+    std::mutex mutex;
+    std::condition_variable cv;
+    std::vector<std::thread> consumers;
+    std::thread producer;
+    std::queue<T> syncQueue;
+    SyncQueue() { }
+    SyncQueue(const SyncQueue&) { }
+
+    void resizeConsumers() {
+      for (int n = syncQueue.size() - consumers.size();
+           (0 < n) && (consumers.size() < maxThreads); n--)
+        consumers.push_back(std::move(std::thread(C, this)));
+    }
+
+  public:
+    SyncQueue(void(*P)(SyncQueue<T, TP, TC>*), void(*C)(SyncQueue<T, TP, TC>*),
+              TP ptoken = nullptr, TC ctoken = nullptr, size_t n = 256):
+      P(P), C(C), ptoken(ptoken), ctoken(ctoken), maxThreads(n) { }
+
+    void start() { producer = std::thread(P, this); }
+    TP getProducerToken() const { return ptoken; }
+    TC getConsumerToken() const { return ctoken; }
+
+    void enqueue(T t) {
+      std::unique_lock<std::mutex> lock(mutex);
+      syncQueue.push(t);
+      resizeConsumers();
+      cv.notify_all();
+    }
+
+    T dequeue() {
+      std::unique_lock<std::mutex> lock(mutex);
+      while (!syncQueue.size()) cv.wait(lock);
+      T t = syncQueue.front();
+      syncQueue.pop();
+      return t;
+    }
+};
+} // end anonymous namespace
+
+THREAD_FUNCTION(producer) {
+  for (printf("[PRODUCER] Listening\n");;) {
+    printf("[PRODUCER] Waiting to accept a connection\n");
+    syncQueue->enqueue(syncQueue->getProducerToken()->AcceptConnection());
+  }
+}
+
+THREAD_FUNCTION(consumer) {
+  for (int S = -1;;S = syncQueue->dequeue()) {
+    printf("[CONSUMER] Handling Socket %d.\n", S);
+    if (S >= 0) close(HttpProto(S));
+  }
+}
+
+int main(int argc, char **argv) {
+  std::string LOAD_DIR = ".";
+  printf("* Beginning Server, Root Directory: %s\n", LOAD_DIR.c_str());
+  CHECK(chdir(LOAD_DIR.c_str()), "Error setting home directory.\n");
+  Networking N(1337);
+  SyncQueue<int, Networking*, void*> sQueue(producer, consumer, &N, nullptr);
+  sQueue.start();
+  while(getchar() != 'q') printf("* Server Started, Enter q to Quit *\n\n");
+  return EXIT_SUCCESS;
 }
