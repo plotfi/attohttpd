@@ -1,3 +1,12 @@
+#!/bin/bash
+#if 0
+tail -n +2 `basename "$0"` > tmp.cpp
+c++ --std=c++11 -O3 tmp.cpp -lpthread -o attohttpd
+rm tmp.cpp
+./attohttpd
+exit 0
+#endif
+
 #define REUSE_PORT 1
 #define MAXPENDING 5  // Max Requests
 #define BUFFERLEN 100 // recv size per iter
