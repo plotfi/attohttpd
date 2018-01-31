@@ -57,21 +57,15 @@ std::string get_mime_type(const char *name) {
   return "text/plain; charset=iso-8859-1";
 }
 
-std::string getTimeBuf(const struct tm *time) { // RFC1123FMT format
-  if (!time) return "";
-  char timebuf[100];
-  strftime(timebuf, sizeof(timebuf), "%a, %d %b %Y %H:%M:%S GMT", time);
-  return std::string(timebuf);
-}
-
-void send_headers(int status, std::string title, std::string extraHeader,
-                  std::string mimeType, off_t len, FILE *socket) {
+void send_headers(int status, std::string title, std::string mime, off_t len,
+                  FILE *socket) {
   time_t now = time(nullptr);
+  char timebuf[100];
+  strftime(timebuf, sizeof(timebuf), "%a, %d %b %Y %H:%M:%S GMT", gmtime(&now));
   fprintf(socket, "%s %d %s\r\n", "HTTP/1.1", status, title.c_str());
   fprintf(socket, "Server: %s\r\n", HTTPD);
-  fprintf(socket, "Date: %s\r\n", getTimeBuf(gmtime(&now)).c_str());
-  if (extraHeader != "") fprintf(socket, "%s\r\n", extraHeader.c_str());
-  if (mimeType != "") fprintf(socket, "Content-Type: %s\r\n", mimeType.c_str());
+  fprintf(socket, "Date: %s\r\n", timebuf);
+  if (mime != "") fprintf(socket, "Content-Type: %s\r\n", mime.c_str());
   if (len >= 0) fprintf(socket, "Content-Length: %lld\r\n", (long long)len);
   fprintf(socket, "Connection: close\r\n\r\n");
 }
@@ -81,30 +75,28 @@ int writeHtmlEnd(int status, FILE *socket) {
   return status;
 }
 
-int send_error(int status, std::string title, std::string extra_header,
-               std::string text, FILE *socket) {
-  send_headers(status, title, extra_header, "text/html", -1, socket);
-  fprintf(socket, "<html><head><title>%d %s</title></head>\n<body "
-          "bgcolor=\"#cc9999\"><h4>%d %s</h4><pre>%s\n", status, title.c_str(),
-          status, title.c_str(), text.c_str());
-  return writeHtmlEnd(status, socket);
+int send_error(int stat, FILE *sock, std::string title, std::string text = "") {
+  send_headers(stat, title, "text/html", -1, sock);
+  fprintf(sock, "<html><head><title>%d %s</title></head>\n<body "
+          "bgcolor=\"#cc9999\"><h4>%d %s</h4><pre>%s\n", stat, title.c_str(),
+          stat, title.c_str(), (text == "" ? title.c_str() : text.c_str()));
+  return writeHtmlEnd(stat, sock);
 }
 
-int doFile(const char *filename, off_t length, FILE *socket) {
+int doFile(const char *filename, FILE *socket) {
   std::ifstream ifs(filename, std::ios::in|std::ios::binary|std::ios::ate);
-  if (!ifs.is_open())
-    return send_error(403, "Forbidden", "", "Protected File.", socket);
-
+  if (!ifs.is_open()) return send_error(403, socket, "Forbidden: Protected.");
   std::streampos pos = ifs.tellg();
-  char buf[static_cast<std::string::size_type>(pos)];
-  bzero(buf, sizeof(buf));
+  const size_t len = static_cast<std::string::size_type>(pos);
+  char *buf = new char[len];
+  bzero(buf, len);
   ifs.seekg(0, std::ios::beg);
   ifs.read(buf, pos);
   ifs.close();
-
-  send_headers(200, "Ok", "", get_mime_type(filename), length, socket);
-  fwrite(buf, sizeof(char), sizeof(buf), socket);
+  send_headers(200, "Ok", get_mime_type(filename), len, socket);
+  fwrite(buf, sizeof(char), len, socket);
   fflush(socket);
+  delete [] buf;
   return 200;
 }
 
@@ -112,13 +104,11 @@ int http_proto(FILE *socket, const char *request) {
   char method[100], path[1000], protocol[100];
 
   if (!request || strlen(request) < strlen("GET / HTTP/1.1"))
-    return send_error(403, "Bad Request", "", "No request found.", socket);
+    return send_error(403, socket, "Bad Request", "No request found.");
   if (sscanf(request, "%[^ ] %[^ ] %[^ ]", method, path, protocol) != 3)
-    return send_error(400, "Bad Request", "", "Can't parse request.", socket);
-  if (strcasecmp(method, "get") != 0)
-    return send_error(501, "Not Implemented", "", "Not implemented.", socket);
-  if (path[0] != '/')
-    return send_error(400, "Bad Request", "", "Bad filename.", socket);
+    return send_error(400, socket, "Bad Request", "Can't parse request.");
+  if (strncasecmp(method, "get", 3)) return send_error(501, socket, "Not Impl");
+  if (path[0] != '/') return send_error(400, socket, "Bad Filename");
 
   std::string fileStr = &(path[1]);
   if (fileStr.c_str()[0] == '\0') fileStr = "./";
@@ -126,19 +116,18 @@ int http_proto(FILE *socket, const char *request) {
   size_t len = strlen(file);
   struct stat sb;
 
-  if (file[0] == '/' || !strcmp(file, "..") || !strncmp(file, "../", 3) ||
-      strstr(file, "/../") != (char *)0 || !strcmp(&(file[len - 3]), "/.."))
-    return send_error(400, "Bad Request", "", "Illegal filename.", socket);
-  if (stat(file, &sb) < 0)
-    return send_error(404, "Not Found", "", "File not found.", socket);
+  if (file[0] == '/' || !strncmp(file, "..", 2) || !strncmp(file, "../", 3) ||
+      strstr(file, "/../") != (char *)0 || !strncmp(&(file[len - 3]), "/..", 3))
+    return send_error(400, socket, "Bad Request", "Illegal filename.");
+  if (stat(file, &sb) < 0) return send_error(404, socket, "File Not Found");
 
   std::string dir = std::string(file) + ((file[len - 1] != '/') ? "/" : "");
   fileStr = S_ISDIR(sb.st_mode) ? (dir + "index.html") : file;
 
   if (!S_ISDIR(sb.st_mode) || (stat(fileStr.c_str(), &sb) >= 0))
-    return doFile(fileStr.c_str(), sb.st_size, socket);
+    return doFile(fileStr.c_str(), socket);
 
-  send_headers(200, "Ok", "", "text/html", -1, socket);
+  send_headers(200, "Ok", "text/html", -1, socket);
   fprintf(socket, "<html><head><title>Index of %s</title></head>\n<body bgcolor"
           "=\"lightblue\"><h4>Index of %s</h4><pre>", dir.c_str(), dir.c_str());
   struct dirent **dl;
@@ -166,39 +155,27 @@ int HttpProto(int socket) {
   return socket;
 }
 
-class Networking {
-  private:
-    const uint16_t portNumber;
-    int ssock; // Server Socket
-
-    Networking(): portNumber(0), ssock(-1) { }
-    Networking(const Networking&): portNumber(0) { }
-
-    int ContructTCPSocket() {
-      int O = REUSE_PORT;                        // reuse port sockopt
-      struct sockaddr_in saddr;                  // Server Socket addr
-      bzero(&saddr, sizeof(saddr));              // Zero serve  struct
-      saddr.sin_family = AF_INET;                // Inet addr family
-      saddr.sin_addr.s_addr = htonl(INADDR_ANY); // Any incoming iface
-      saddr.sin_port = htons(portNumber);        // Local (server) port
-      CHECK(ssock = socket(PF_INET, SOCK_STREAM, IPPROTO_TCP), "socket()");
-      CHECK(setsockopt(ssock, SOL_SOCKET, SO_REUSEADDR, &O, sizeof(O)), "opt");
-      CHECK(bind(ssock, (struct sockaddr *)&saddr, sizeof(saddr)), "bind()");
-      CHECK(listen(ssock, MAXPENDING), "listen()");
-      return ssock;
-    }
-    int ServerSocket() { return ssock >= 0 ? ssock : ContructTCPSocket(); }
-
-  public:
-    Networking(uint16_t portNumber): portNumber(portNumber), ssock(-1) { }
-    int AcceptConnection() {
-      struct sockaddr_in addr;
-      unsigned len = sizeof(addr);
-      int clientSocket = accept(ServerSocket(), (struct sockaddr *)&addr, &len);
-      printf("Handling client %s\n", inet_ntoa(addr.sin_addr));
-      return (clientSocket < 0) ? -1 : clientSocket;
-    }
-};
+int ContructTCPSocket(uint16_t portNumber) {
+  int ssock; // Server Socket
+  int O = REUSE_PORT;                        // reuse port sockopt
+  struct sockaddr_in saddr;                  // Server Socket addr
+  bzero(&saddr, sizeof(saddr));              // Zero serve  struct
+  saddr.sin_family = AF_INET;                // Inet addr family
+  saddr.sin_addr.s_addr = htonl(INADDR_ANY); // Any incoming iface
+  saddr.sin_port = htons(portNumber);        // Local (server) port
+  CHECK(ssock = socket(PF_INET, SOCK_STREAM, IPPROTO_TCP), "socket()");
+  CHECK(setsockopt(ssock, SOL_SOCKET, SO_REUSEADDR, &O, sizeof(O)), "opt");
+  CHECK(bind(ssock, (struct sockaddr *)&saddr, sizeof(saddr)), "bind()");
+  CHECK(listen(ssock, MAXPENDING), "listen()");
+  return ssock;
+}
+int AcceptConnection(int ssock) {
+  struct sockaddr_in addr;
+  unsigned len = sizeof(addr);
+  int clientSocket = accept(ssock, (struct sockaddr *)&addr, &len);
+  printf("Handling client %s\n", inet_ntoa(addr.sin_addr));
+  return (clientSocket < 0) ? -1 : clientSocket;
+}
 
 template <class T> class SyncQueue {
   private:
@@ -219,45 +196,30 @@ template <class T> class SyncQueue {
       return t;
     }
 };
-
-class ThreadPool {
-  private:
-    std::vector<std::thread> consumers;
-    std::thread producer;
-    ThreadPool() { }
-    ThreadPool(const ThreadPool&) { }
-  public:
-    ThreadPool(std::function<void()> P, std::function<void()> C, size_t n = 8) {
-      producer = std::thread(P);
-      for (unsigned i = 0; i < n; ++i)
-        consumers.push_back(std::move(std::thread(C)));
-    }
-};
-
 } // end anonymous namespace
 
 int main(int argc, char **argv) {
   std::string LOAD_DIR = ".";
   printf("* Beginning Server, Root Directory: %s\n", LOAD_DIR.c_str());
   CHECK(chdir(LOAD_DIR.c_str()), "Error setting home directory.\n");
-  Networking N(1337);
   SyncQueue<int> sQueue;
-
+  int serverSocket = ContructTCPSocket(1337);
   auto producer = [&]() {
     for (printf("[PRODUCER] Listening\n");;) {
       printf("[PRODUCER] Waiting to accept a connection\n");
-      sQueue.enqueue(N.AcceptConnection());
+      sQueue.enqueue(AcceptConnection(serverSocket));
     }
   };
-
   auto consumer = [&]() {
     for (int S = -1;;S = sQueue.dequeue()) {
       printf("[CONSUMER] Handling Socket %d.\n", S);
       if (S >= 0) close(HttpProto(S));
     }
   };
-
-  ThreadPool pool(producer, consumer);
+  std::thread producerThread(producer);
+  std::vector<std::thread> consumerThreads;
+  for (unsigned i = 0; i < 8; ++i)
+    consumerThreads.push_back(std::move(std::thread(consumer)));
 
   while(getchar() != 'q') printf("* Server Started, Enter q to Quit *\n\n");
   return EXIT_SUCCESS;
