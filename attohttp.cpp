@@ -1,12 +1,3 @@
-#!/bin/bash
-#if 0
-tail -n +2 `basename "$0"` > tmp.cpp
-c++ --std=c++11 -O3 tmp.cpp -lpthread -o attohttpd
-rm tmp.cpp
-./attohttpd
-exit 0
-#endif
-
 #define REUSE_PORT 1
 #define MAXPENDING 5  // Max Requests
 #define BUFFERLEN 100 // recv size per iter
@@ -22,6 +13,7 @@ exit 0
 #include <cstdint>
 #include <cstring>
 #include <cassert>
+#include <sstream>
 #include <fstream>
 #include <iostream>
 #include <unistd.h>
@@ -30,9 +22,9 @@ exit 0
 #include <functional>
 #include <sys/stat.h>
 #include <sys/types.h>
-#include <arpa/inet.h>  // Address Structs
-#include <netinet/in.h> // IP Datatypes
-#include <sys/socket.h> // Socket Functions
+#include <arpa/inet.h>
+#include <netinet/in.h>
+#include <sys/socket.h>
 #include <mutex>
 #include <queue>
 #include <vector>
@@ -66,30 +58,34 @@ std::string get_mime_type(const char *name) {
   return "text/plain; charset=iso-8859-1";
 }
 
-void send_headers(int status, std::string title, std::string mime, off_t len,
-                  FILE *socket) {
+void send_headers(int status, std::string title, std::string mime, FILE *socket,
+                  off_t len  = -1) {
   time_t now = time(nullptr);
   char timebuf[100];
   strftime(timebuf, sizeof(timebuf), "%a, %d %b %Y %H:%M:%S GMT", gmtime(&now));
   fprintf(socket, "%s %d %s\r\n", "HTTP/1.1", status, title.c_str());
   fprintf(socket, "Server: %s\r\n", HTTPD);
-  fprintf(socket, "Date: %s\r\n", timebuf);
   if (mime != "") fprintf(socket, "Content-Type: %s\r\n", mime.c_str());
   if (len >= 0) fprintf(socket, "Content-Length: %lld\r\n", (long long)len);
   fprintf(socket, "Connection: close\r\n\r\n");
 }
 
-int writeHtmlEnd(int status, FILE *socket) {
+void HttpStart(int status, FILE *socket, std::string color, std::string title) {
+  send_headers(status, (status == 200 ? "Ok" : title), "text/html", socket);
+  fprintf(socket, "<html><head><title>%s</title></head><body bgcolor=%s>"
+          "<h4>%s</h4><pre>", title.c_str(), color.c_str(), title.c_str());
+}
+int HttpEnd(int status, FILE *socket) {
   fprintf(socket, "</pre><a href=\"%s\">%s</a></body></html>\n", URL, HTTPD);
   return status;
 }
 
 int send_error(int stat, FILE *sock, std::string title, std::string text = "") {
-  send_headers(stat, title, "text/html", -1, sock);
-  fprintf(sock, "<html><head><title>%d %s</title></head>\n<body "
-          "bgcolor=\"#cc9999\"><h4>%d %s</h4><pre>%s\n", stat, title.c_str(),
-          stat, title.c_str(), (text == "" ? title.c_str() : text.c_str()));
-  return writeHtmlEnd(stat, sock);
+  send_headers(stat, title, "text/html", sock);
+  std::stringstream sstr; sstr << stat << " ";
+  HttpStart(stat, sock, "#cc9999", sstr.str() + title);
+  fprintf(sock, "%s", (text == "" ? title.c_str() : text.c_str()));
+  return HttpEnd(stat, sock);
 }
 
 int doFile(const char *filename, FILE *socket) {
@@ -102,7 +98,7 @@ int doFile(const char *filename, FILE *socket) {
   ifs.seekg(0, std::ios::beg);
   ifs.read(buf, pos);
   ifs.close();
-  send_headers(200, "Ok", get_mime_type(filename), len, socket);
+  send_headers(200, "Ok", get_mime_type(filename), socket, len);
   fwrite(buf, sizeof(char), len, socket);
   fflush(socket);
   delete [] buf;
@@ -136,17 +132,14 @@ int http_proto(FILE *socket, const char *request) {
   if (!S_ISDIR(sb.st_mode) || (stat(fileStr.c_str(), &sb) >= 0))
     return doFile(fileStr.c_str(), socket);
 
-  send_headers(200, "Ok", "text/html", -1, socket);
-  fprintf(socket, "<html><head><title>Index of %s</title></head>\n<body bgcolor"
-          "=\"lightblue\"><h4>Index of %s</h4><pre>", dir.c_str(), dir.c_str());
+  HttpStart(200, socket, "lightblue", std::string("Index of ") + dir);
   struct dirent **dl;
-  int n = scandir(dir.c_str(), &dl, NULL, alphasort);
-  for (unsigned i = 0; i < n; ++i) {
+  for (int i = 0, n = scandir(dir.c_str(), &dl, NULL, alphasort); i != n; ++i) {
     fprintf(socket, "<a href=\"%s\">%s</a>\n", dl[i]->d_name, dl[i]->d_name);
     free(dl[i]);
   }
   free(dl);
-  return writeHtmlEnd(200, socket);
+  return HttpEnd(200, socket);
 }
 
 int HttpProto(int socket) {
