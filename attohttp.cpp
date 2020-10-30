@@ -4,77 +4,100 @@
 #define HTTPD "attohttpd"
 #define URL "http://www.puyan.org"
 
-#include <time.h>
-#include <cstdio>
-#include <ctype.h>
-#include <cstring>
-#include <cstddef>
-#include <cstdlib>
-#include <cstdint>
-#include <cstring>
+#include <arpa/inet.h>
 #include <cassert>
-#include <sstream>
-#include <fstream>
-#include <iostream>
-#include <unistd.h>
+#include <condition_variable>
+#include <cstddef>
+#include <cstdint>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <ctype.h>
 #include <dirent.h>
-#include <inttypes.h>
+#include <fstream>
 #include <functional>
+#include <inttypes.h>
+#include <iostream>
+#include <mutex>
+#include <netinet/in.h>
+#include <queue>
+#include <sstream>
+#include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/types.h>
-#include <arpa/inet.h>
-#include <netinet/in.h>
-#include <sys/socket.h>
-#include <mutex>
-#include <queue>
-#include <vector>
 #include <thread>
-#include <condition_variable>
+#include <time.h>
+#include <unistd.h>
+#include <vector>
 
-#define CHECK(check, message) \
-  do { if ((check) < 0) { \
-      fprintf(stderr, "%s failed: Error on line %d.\n", (message), __LINE__); \
-      perror(message); exit(EXIT_FAILURE); \
-  } } while (false)
+#define CHECK(check, message)                                                  \
+  do {                                                                         \
+    if ((check) < 0) {                                                         \
+      fprintf(stderr, "%s failed: Error on line %d.\n", (message), __LINE__);  \
+      perror(message);                                                         \
+      exit(EXIT_FAILURE);                                                      \
+    }                                                                          \
+  } while (false)
 
 namespace {
+
 std::string get_mime_type(const char *name) {
   const char *dot = strrchr(name, '.');
-  if (dot && !strncmp(dot, ".html", 4)) return "text/html; charset=iso-8859-1";
-  if (dot && !strncmp(dot, ".midi", 4)) return "audio/midi";
-  if (dot && !strncmp(dot, ".jpeg", 4)) return "image/jpeg";
-  if (dot && !strncmp(dot, ".mpeg", 4)) return "video/mpeg";
-  if (dot && !strncmp(dot, ".gif" , 4)) return "image/gif";
-  if (dot && !strncmp(dot, ".png" , 4)) return "image/png";
-  if (dot && !strncmp(dot, ".css" , 4)) return "text/css";
-  if (dot && !strncmp(dot, ".au"  , 3)) return "audio/basic";
-  if (dot && !strncmp(dot, ".wav" , 4)) return "audio/wav";
-  if (dot && !strncmp(dot, ".avi" , 4)) return "video/x-msvideo";
-  if (dot && !strncmp(dot, ".mov" , 4)) return "video/quicktime";
-  if (dot && !strncmp(dot, ".mp3" , 4)) return "audio/mpeg";
-  if (dot && !strncmp(dot, ".m4a" , 4)) return "audio/mp4";
-  if (dot && !strncmp(dot, ".pdf" , 4)) return "application/pdf";
-  if (dot && !strncmp(dot, ".ogg" , 4)) return "application/ogg";
+  if (dot && !strncmp(dot, ".html", 4))
+    return "text/html; charset=iso-8859-1";
+  if (dot && !strncmp(dot, ".midi", 4))
+    return "audio/midi";
+  if (dot && !strncmp(dot, ".jpeg", 4))
+    return "image/jpeg";
+  if (dot && !strncmp(dot, ".mpeg", 4))
+    return "video/mpeg";
+  if (dot && !strncmp(dot, ".gif", 4))
+    return "image/gif";
+  if (dot && !strncmp(dot, ".png", 4))
+    return "image/png";
+  if (dot && !strncmp(dot, ".css", 4))
+    return "text/css";
+  if (dot && !strncmp(dot, ".au", 3))
+    return "audio/basic";
+  if (dot && !strncmp(dot, ".wav", 4))
+    return "audio/wav";
+  if (dot && !strncmp(dot, ".avi", 4))
+    return "video/x-msvideo";
+  if (dot && !strncmp(dot, ".mov", 4))
+    return "video/quicktime";
+  if (dot && !strncmp(dot, ".mp3", 4))
+    return "audio/mpeg";
+  if (dot && !strncmp(dot, ".m4a", 4))
+    return "audio/mp4";
+  if (dot && !strncmp(dot, ".pdf", 4))
+    return "application/pdf";
+  if (dot && !strncmp(dot, ".ogg", 4))
+    return "application/ogg";
   return "text/plain; charset=iso-8859-1";
 }
 
 void send_headers(int status, std::string title, std::string mime, FILE *socket,
-                  off_t len  = -1) {
+                  off_t len = -1) {
   time_t now = time(nullptr);
   char timebuf[100];
   strftime(timebuf, sizeof(timebuf), "%a, %d %b %Y %H:%M:%S GMT", gmtime(&now));
   fprintf(socket, "%s %d %s\r\n", "HTTP/1.1", status, title.c_str());
   fprintf(socket, "Server: %s\r\n", HTTPD);
-  if (mime != "") fprintf(socket, "Content-Type: %s\r\n", mime.c_str());
-  if (len >= 0) fprintf(socket, "Content-Length: %lld\r\n", (long long)len);
+  if (mime != "")
+    fprintf(socket, "Content-Type: %s\r\n", mime.c_str());
+  if (len >= 0)
+    fprintf(socket, "Content-Length: %lld\r\n", (long long)len);
   fprintf(socket, "Connection: close\r\n\r\n");
 }
 
 void HttpStart(int status, FILE *socket, std::string color, std::string title) {
   send_headers(status, (status == 200 ? "Ok" : title), "text/html", socket);
-  fprintf(socket, "<html><head><title>%s</title></head><body bgcolor=%s>"
-          "<h4>%s</h4><pre>", title.c_str(), color.c_str(), title.c_str());
+  fprintf(socket,
+          "<html><head><title>%s</title></head><body bgcolor=%s>"
+          "<h4>%s</h4><pre>",
+          title.c_str(), color.c_str(), title.c_str());
 }
+
 int HttpEnd(int status, FILE *socket) {
   fprintf(socket, "</pre><a href=\"%s\">%s</a></body></html>\n", URL, HTTPD);
   return status;
@@ -82,15 +105,17 @@ int HttpEnd(int status, FILE *socket) {
 
 int send_error(int stat, FILE *sock, std::string title, std::string text = "") {
   send_headers(stat, title, "text/html", sock);
-  std::stringstream sstr; sstr << stat << " ";
+  std::stringstream sstr;
+  sstr << stat << " ";
   HttpStart(stat, sock, "#cc9999", sstr.str() + title);
   fprintf(sock, "%s", (text == "" ? title.c_str() : text.c_str()));
   return HttpEnd(stat, sock);
 }
 
 int doFile(const char *filename, FILE *socket) {
-  std::ifstream ifs(filename, std::ios::in|std::ios::binary|std::ios::ate);
-  if (!ifs.is_open()) return send_error(403, socket, "Forbidden: Protected.");
+  std::ifstream ifs(filename, std::ios::in | std::ios::binary | std::ios::ate);
+  if (!ifs.is_open())
+    return send_error(403, socket, "Forbidden: Protected.");
   std::streampos pos = ifs.tellg();
   const size_t len = static_cast<std::string::size_type>(pos);
   char *buf = new char[len];
@@ -101,7 +126,7 @@ int doFile(const char *filename, FILE *socket) {
   send_headers(200, "Ok", get_mime_type(filename), socket, len);
   fwrite(buf, sizeof(char), len, socket);
   fflush(socket);
-  delete [] buf;
+  delete[] buf;
   return 200;
 }
 
@@ -112,11 +137,14 @@ int http_proto(FILE *socket, const char *request) {
     return send_error(403, socket, "Bad Request", "No request found.");
   if (sscanf(request, "%[^ ] %[^ ] %[^ ]", method, path, protocol) != 3)
     return send_error(400, socket, "Bad Request", "Can't parse request.");
-  if (strncasecmp(method, "get", 3)) return send_error(501, socket, "Not Impl");
-  if (path[0] != '/') return send_error(400, socket, "Bad Filename");
+  if (strncasecmp(method, "get", 3))
+    return send_error(501, socket, "Not Impl");
+  if (path[0] != '/')
+    return send_error(400, socket, "Bad Filename");
 
   std::string fileStr = &(path[1]);
-  if (fileStr.c_str()[0] == '\0') fileStr = "./";
+  if (fileStr.c_str()[0] == '\0')
+    fileStr = "./";
   const char *file = fileStr.c_str();
   size_t len = strlen(file);
   struct stat sb;
@@ -124,7 +152,8 @@ int http_proto(FILE *socket, const char *request) {
   if (file[0] == '/' || !strncmp(file, "..", 2) || !strncmp(file, "../", 3) ||
       strstr(file, "/../") != (char *)0 || !strncmp(&(file[len - 3]), "/..", 3))
     return send_error(400, socket, "Bad Request", "Illegal filename.");
-  if (stat(file, &sb) < 0) return send_error(404, socket, "File Not Found");
+  if (stat(file, &sb) < 0)
+    return send_error(404, socket, "File Not Found");
 
   std::string dir = std::string(file) + ((file[len - 1] != '/') ? "/" : "");
   fileStr = S_ISDIR(sb.st_mode) ? (dir + "index.html") : file;
@@ -148,7 +177,8 @@ int HttpProto(int socket) {
     bzero(buffer, BUFFERLEN);
     int newBytes = read(socket, buffer, BUFFERLEN);
     requestStr += (newBytes > 0) ? std::string(buffer) : "";
-    if (newBytes < BUFFERLEN) break;
+    if (newBytes < BUFFERLEN)
+      break;
   }
 
   FILE *socketFile = fdopen(socket, "w");
@@ -158,7 +188,7 @@ int HttpProto(int socket) {
 }
 
 int ContructTCPSocket(uint16_t portNumber) {
-  int ssock; // Server Socket
+  int ssock;                                 // Server Socket
   int O = REUSE_PORT;                        // reuse port sockopt
   struct sockaddr_in saddr;                  // Server Socket addr
   bzero(&saddr, sizeof(saddr));              // Zero serve  struct
@@ -180,23 +210,25 @@ int AcceptConnection(int ssock) {
 }
 
 template <class T> class SyncQueue {
-  private:
-    std::mutex mutex;
-    std::condition_variable cv;
-    std::queue<T> syncQueue;
-  public:
-    void enqueue(T t) {
-      std::unique_lock<std::mutex> lock(mutex);
-      syncQueue.push(t);
-      cv.notify_all();
-    }
-    T dequeue() {
-      std::unique_lock<std::mutex> lock(mutex);
-      while (!syncQueue.size()) cv.wait(lock);
-      T t = syncQueue.front();
-      syncQueue.pop();
-      return t;
-    }
+private:
+  std::mutex mutex;
+  std::condition_variable cv;
+  std::queue<T> syncQueue;
+
+public:
+  void enqueue(T t) {
+    std::unique_lock<std::mutex> lock(mutex);
+    syncQueue.push(t);
+    cv.notify_all();
+  }
+  T dequeue() {
+    std::unique_lock<std::mutex> lock(mutex);
+    while (!syncQueue.size())
+      cv.wait(lock);
+    T t = syncQueue.front();
+    syncQueue.pop();
+    return t;
+  }
 };
 } // end anonymous namespace
 
@@ -213,9 +245,10 @@ int main(int argc, char **argv) {
     }
   };
   auto consumer = [&]() {
-    for (int S = -1;;S = sQueue.dequeue()) {
+    for (int S = -1;; S = sQueue.dequeue()) {
       printf("[CONSUMER] Handling Socket %d.\n", S);
-      if (S >= 0) close(HttpProto(S));
+      if (S >= 0)
+        close(HttpProto(S));
     }
   };
   std::thread producerThread(producer);
@@ -223,6 +256,7 @@ int main(int argc, char **argv) {
   for (unsigned i = 0; i < 8; ++i)
     consumerThreads.push_back(std::move(std::thread(consumer)));
 
-  while(getchar() != 'q') printf("* Server Started, Enter q to Quit *\n\n");
+  while (getchar() != 'q')
+    printf("* Server Started, Enter q to Quit *\n\n");
   return EXIT_SUCCESS;
 }
